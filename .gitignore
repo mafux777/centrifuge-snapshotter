@@ -3,7 +3,8 @@
 .DS_Store
 build
 node_modules
-src/**.js
+*.js
+*.js.map
 *.log
 yarn.lock
 src/interfaces/*

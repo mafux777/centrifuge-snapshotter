@@ -228,14 +228,14 @@ async function fetchAndProcess(): Promise<void> {
             }
             const my_blockno = data_hr.endBN; // last block of that hour
             const ts = data_hr.endTS; // timestamp in Linux notation
-            const section = "pools";
-            const storage = "nav";
-            const track = "pools";
+            let section = "pool";
+            let storage = "nav";
+            let track = "pool";
             const source = "funkmeister380";
 
             console.log(`Connecting to parachain at ${my_blockhash}`);
 
-              const poolData = centrifuge.getApi().pipe(
+            const poolData = centrifuge.getApi().pipe(
                 map((api) => {
                   return api.at(my_blockhash);
                 }),
@@ -250,25 +250,58 @@ async function fetchAndProcess(): Promise<void> {
                       api.call.poolsApi.nav(poolId),
                       api.call.loansApi.portfolio(poolId),
                       api.call.poolsApi.trancheTokenPrices(poolId),
+                      //api.query.ormlTokens.totalIssuance({ Tranche: [poolId, trancheId] }), --- THIS NEEDS TO BE DONE LATER WHEN THE TRANCHE ID BECOMES AVAILABLE
+                      api.query.poolSystem.pool(poolId),
                     ]).pipe(
-                      map(([nav, portfolio, trancheTokenPrices]) => {
+                      map(([nav, portfolio, trancheTokenPrices, other]) => {
                         return {
                           poolId,
                           nav: nav.toJSON(),
                           portfolio: portfolio.toJSON(),
                           trancheTokenPrices: trancheTokenPrices.toJSON(),
+                          //totalIssuance: totalIssuance.toJSON(),
+                          other:  other.toJSON(),
+                          //tranche: tranches.toJSON()
                         };
                       })
                     );
                   });
                   return forkJoin(poolCalls);
                 })
-              );
+            );
 
             const results = await firstValueFrom(poolData);
             console.log(results);
 
             const portfolioValues = [];
+            const poolValues = [];
+
+            // iterate through the pools (only 1 pool for now)
+            for(const r of results) {
+                console.log(`poolId=${r.poolId} `);
+                let pool = {
+                    chain_name: chain_name,
+                    block_hash: my_blockhash,
+                    block_number: my_blockno,
+                    ts: ts,
+                    section: section,
+                    storage: storage,
+                    track: track,
+                    track_val: r.poolId,
+                    source: source,
+                    kv: r.poolId,
+                    pv: {
+                        nav: r.nav,
+                        trancheTokenValues: (r.trancheTokenPrices as any[]).filter(
+                            value => typeof value === 'string' && value !== "0") // Check for non-zero strings
+                          .map((hex:string) => BigInt(hex).toString(10)) // Convert to decimal string
+                          .map(Number)
+                          .map((f:number) => f/1e18),
+                        //tranches: r.tranche // <-- check this
+                    }
+                };
+                poolValues.push(JSON.stringify(pool));
+            }
 
             // iterate through the pools (only 1 pool for now)
             for(const r of results) {
@@ -290,11 +323,6 @@ async function fetchAndProcess(): Promise<void> {
                         kv: p[0],
                         pv: {
                             nav: r.nav,
-                            trancheTokenValues: (r.trancheTokenPrices as any[]).filter(
-                                value => typeof value === 'string' && value !== "0") // Check for non-zero strings
-                              .map((hex:string) => BigInt(hex).toString(10)) // Convert to decimal string
-                              .map(Number)
-                              .map((f:number) => f/1e18),
                             ...p[1]
                         }
                     };
