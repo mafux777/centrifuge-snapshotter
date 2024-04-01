@@ -243,42 +243,17 @@ async function fetchAndProcess(): Promise<void> {
                   const pools = centrifuge.pools.getPools();
                   return combineLatest([api, pools]);
                 }),
-                switchMap(([api, pools]) => {
-                  const poolIds = pools.map((pool) => pool.id);
-                  const poolCalls = poolIds.map((poolId) => {
-                    return forkJoin([
-                      api.call.poolsApi.nav(poolId),
-                      api.call.loansApi.portfolio(poolId),
-                      api.call.poolsApi.trancheTokenPrices(poolId),
-                      //api.query.ormlTokens.totalIssuance({ Tranche: [poolId, trancheId] }), --- THIS NEEDS TO BE DONE LATER WHEN THE TRANCHE ID BECOMES AVAILABLE
-                      api.query.poolSystem.pool(poolId),
-                    ]).pipe(
-                      map(([nav, portfolio, trancheTokenPrices, other]) => {
-                        return {
-                          poolId,
-                          nav: nav.toJSON(),
-                          portfolio: portfolio.toJSON(),
-                          trancheTokenPrices: trancheTokenPrices.toJSON(),
-                          //totalIssuance: totalIssuance.toJSON(),
-                          other:  other.toJSON(),
-                          //tranche: tranches.toJSON()
-                        };
-                      })
-                    );
-                  });
-                  return forkJoin(poolCalls);
-                })
             );
 
-            const results = await firstValueFrom(poolData);
+            const [api, results] = await firstValueFrom(poolData);
             console.log(results);
 
             const portfolioValues = [];
             const poolValues = [];
 
             // iterate through the pools (only 1 pool for now)
-            for(const r of results) {
-                console.log(`poolId=${r.poolId} `);
+            for(const p of results) {
+                console.log(`poolId=${p.id} `);
                 let pool = {
                     chain_name: chain_name,
                     block_hash: my_blockhash,
@@ -287,63 +262,58 @@ async function fetchAndProcess(): Promise<void> {
                     section: section,
                     storage: storage,
                     track: track,
-                    track_val: r.poolId,
+                    track_val: p.id,
                     source: source,
-                    kv: r.poolId,
+                    kv: p.id,
                     pv: {
-                        nav: r.nav,
-                        trancheTokenValues: (r.trancheTokenPrices as any[]).filter(
-                            value => typeof value === 'string' && value !== "0") // Check for non-zero strings
-                          .map((hex:string) => BigInt(hex).toString(10)) // Convert to decimal string
-                          .map(Number)
-                          .map((f:number) => f/1e18),
-                        //tranches: r.tranche // <-- check this
+                        nav: p.nav,
+                        tranches: p.tranches,
                     }
                 };
                 poolValues.push(JSON.stringify(pool));
             }
 
-            // iterate through the pools (only 1 pool for now)
-            for(const r of results) {
-                // @ts-ignore
-                for(const p of r.portfolio) {
-                    console.log(`poolId=${r.poolId} portfolio=${p[1]}`);
-                    let portfolio = {
-                        chain_name: chain_name,
-                        block_hash: my_blockhash,
-                        address_ss58: p[1].activeLoan?.borrower,
-                        address_pubkey: paraTool.getPubKey(p[1].activeLoan?.borrower),
-                        block_number: my_blockno,
-                        ts: ts,
-                        section: section,
-                        storage: storage,
-                        track: track,
-                        track_val: r.poolId,
-                        source: source,
-                        kv: p[0],
-                        pv: {
-                            nav: r.nav,
-                            ...p[1]
-                        }
-                    };
-                    const conversionMap: ConversionMap = {
-                        "pricing.external.info.priceId.isin": hexToUtf8,
-                        "pricing.external.info.maxPriceVariation": value => paraTool.dechexToInt(value) / 1e27,
-                        "pricing.external.maxPriceVariation": paraTool.dechexToInt,
-                        "pricing.external.settlementPriceUpdated": unixTimestampToIsoDate,
-                        "schedule.maturity.fixed.date": unixTimestampToIsoDate,
-                        "repaymentsOnScheduleUntil": unixTimestampToIsoDate,
-                        "originationDate": unixTimestampToIsoDate,
-                    };
-
-
-                    if('activeLoan' in portfolio.pv){
-                        applyConversion(portfolio.pv.activeLoan, conversionMap);
-                    }
-                    portfolioValues.push(JSON.stringify(portfolio));
-
-                }
-            }
+            // // iterate through the pools (only 1 pool for now)
+            // for(const r of results) {
+            //     // @ts-ignore
+            //     for(const p of r.portfolio) {
+            //         console.log(`poolId=${r.poolId} portfolio=${p[1]}`);
+            //         let portfolio = {
+            //             chain_name: chain_name,
+            //             block_hash: my_blockhash,
+            //             address_ss58: p[1].activeLoan?.borrower,
+            //             address_pubkey: paraTool.getPubKey(p[1].activeLoan?.borrower),
+            //             block_number: my_blockno,
+            //             ts: ts,
+            //             section: section,
+            //             storage: storage,
+            //             track: track,
+            //             track_val: r.poolId,
+            //             source: source,
+            //             kv: p[0],
+            //             pv: {
+            //                 nav: r.nav,
+            //                 ...p[1]
+            //             }
+            //         };
+            //         const conversionMap: ConversionMap = {
+            //             "pricing.external.info.priceId.isin": hexToUtf8,
+            //             "pricing.external.info.maxPriceVariation": value => paraTool.dechexToInt(value) / 1e27,
+            //             "pricing.external.maxPriceVariation": paraTool.dechexToInt,
+            //             "pricing.external.settlementPriceUpdated": unixTimestampToIsoDate,
+            //             "schedule.maturity.fixed.date": unixTimestampToIsoDate,
+            //             "repaymentsOnScheduleUntil": unixTimestampToIsoDate,
+            //             "originationDate": unixTimestampToIsoDate,
+            //         };
+            //
+            //
+            //         if('activeLoan' in portfolio.pv){
+            //             applyConversion(portfolio.pv.activeLoan, conversionMap);
+            //         }
+            //         portfolioValues.push(JSON.stringify(portfolio));
+            //
+            //     }
+            // }
 
             // JSON Writing
 
@@ -360,7 +330,7 @@ async function fetchAndProcess(): Promise<void> {
             // Construct the full file path
             const filePath = path.join(dirPath, `${relayChain}_snapshots_${paraID}_${dateString}_${targetHR}.json`);
 
-            fs.writeFileSync(filePath, portfolioValues.join("\n")); // one line per item
+            fs.writeFileSync(filePath, poolValues.join("\n")); // one line per item
             console.log(`Data written to ${filePath} JSON successfully`);
         }
     }
