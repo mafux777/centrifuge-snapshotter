@@ -158,6 +158,59 @@ interface ConversionMap {
     [key: string]: ConversionFunction;
 }
 
+interface NavType {
+  navAum: string;
+  navFees: string;
+  reserve: string;
+}
+
+interface Pool {
+  // Assuming types for variables not shown in the snippet
+  chain_name: string;
+  block_hash: string;
+  block_number: number;
+  ts: number; // Assuming timestamp is a number
+  section: string;
+  storage: string;
+  track: string;
+  track_val: NavType | null; // Assuming navType or null if nav might not exist
+  source: string;
+  kv: string; // Assuming poolId is a string
+  pv: {
+    nav: {
+      nav_aum: number;
+      nav_fees: number;
+      onchain_cash: number;
+      total: number;
+    };
+    tranches: Tranche[];
+  };
+}
+
+interface Tranche {
+  share: number;
+  pricePerShare: number;
+  value: number;
+}
+
+interface LocalAsset {
+    localAsset: number
+}
+interface PoolCurrency {
+    currency: LocalAsset;
+}
+
+interface Currency {
+    decimals: number;
+  symbol: string;
+}
+
+interface Result {
+  poolId: string;
+  totalIssuance: { toJSON: () => string }[];
+  trancheTokenPrices?: string[];
+  nav?: NavType;
+}
 
 // Define a conversion map specific to your needs
 function applyConversion(obj: any, conversionMap: ConversionMap, path: string[] = []): void {
@@ -235,25 +288,157 @@ async function fetchAndProcess(): Promise<void> {
 
             console.log(`Connecting to parachain at ${my_blockhash}`);
 
-            const poolData = centrifuge.getApi().pipe(
-                map((api) => {
-                  return api.at(my_blockhash);
-                }),
-                switchMap((api) => {
-                  const pools = centrifuge.pools.getPools();
-                  return combineLatest([api, pools]);
-                }),
-            );
+                const poolData = centrifuge.getApi().pipe(
+                  map(api => api.at(my_blockhash)),
+                  switchMap(api => {
+                    const pools = centrifuge.pools.getPools();
+                    return combineLatest([api, pools]);
+                  }),
+                  switchMap(([api, pools]) => {
+                    const poolCalls = pools.map(pool => {
+                      const trancheTotalIssuance = pool.tranches.map(tranche =>
+                        api.query.ormlTokens.totalIssuance({ Tranche: [pool.id, tranche.id] })
+                      );
+                      return forkJoin([
+                        api.call.poolsApi.nav(pool.id),
+                        api.call.loansApi.portfolio(pool.id),
+                        api.call.poolsApi.trancheTokenPrices(pool.id),
+                        api.query.poolSystem.pool(pool.id),
+                        ...trancheTotalIssuance,
+                      ]).pipe(
+                        switchMap(([nav, portfolio, trancheTokenPrices, poolCurrency,...totalIssuance]) => {
+                          // Use poolCurrency to fetch metadata
+                          const poolCurr = poolCurrency.toJSON() as unknown as PoolCurrency;
+                          return api.query.ormlAssetRegistry.metadata(poolCurr.currency).pipe(
+                            map(metadata => ({
+                              poolId: pool.id,
+                              nav: nav.toJSON(),
+                              portfolio: portfolio.toJSON(),
+                              trancheTokenPrices: trancheTokenPrices.toJSON(),
+                              totalIssuance,
+                              poolCurrency: poolCurrency.toJSON(),
+                              metadata: metadata.toJSON(), // Add the metadata to your final object
+                            }))
+                          );
+                        })
+                      );
+                    });
+                    return forkJoin(poolCalls);
+                  })
+                );
 
-            const [api, results] = await firstValueFrom(poolData);
+            const results = await firstValueFrom(poolData);
             console.log(results);
 
-            const portfolioValues = [];
-            const poolValues = [];
+            const poolValues: string[] = [];
 
-            // iterate through the pools (only 1 pool for now)
+            // iterate through the pools
             for(const p of results) {
-                console.log(`poolId=${p.id} `);
+                console.log(`poolId=${p.poolId} `);
+
+                // Work on the "Assets", which are available in the portfolio. This is a list of assets in the pool
+                // portfolio is an array of arrays
+                let assets = [];
+                if(!p.portfolio) {
+                    throw new Error('portfolio is missing');
+                } else
+                    assets = p.portfolio as any[];
+
+                const poolCurrency = p.poolCurrency as unknown as PoolCurrency;
+                const pc = poolCurrency.currency;
+
+                for (let i = 0; i < assets.length; i++) {
+                    const assetId = assets[i][0];
+                    let asset_type: string;
+                    if("internal" in assets[i][1].activeLoan.pricing && assets[i][1].activeLoan.pricing.valuationMethod === "Cash") {
+                        asset_type = "OffchainCash";
+                    } else {
+                        asset_type = "Other";
+                    }
+
+                    // @ts-ignore
+                    const asset = {
+                        chain_name: chain_name,
+                        block_hash: my_blockhash,
+                        block_number: my_blockno,
+                        ts: ts,
+                        section: 'assets',
+                        storage: 'loans',
+                        track: 'portfolio', // arbitrary
+                        //track_val: p.nav,
+                        source: source,
+
+                        pv: {
+                            asset_id:
+                            {
+                                pool: p.poolId,
+                                id: assetId
+                            }
+                        },
+                        kv : {
+                            pool_currency: {
+                                currency: pc,
+                                decimals: (p.metadata as unknown as Currency).decimals,
+                                symbol: hexToUtf8((p.metadata as unknown as Currency).symbol)
+                            },
+                            total_repaid_principal: assets[i][1].activeLoan.totalRepaid.principal,
+                            total_repaid_interest: assets[i][1].activeLoan.totalRepaid.interest,
+                            total_repaid_unscheduled: assets[i][1].activeLoan.totalRepaid.unscheduled,
+                            total_borrowed: assets[i][1].activeLoan.totalBorrowed,
+                            present_value: assets[i][1].presentValue,
+                            maturity_date: assets[i][1].activeLoan.schedule.maturity.fixed.date,
+                            outstanding_principal: assets[i][1].outstandingPrincipal,
+                            outstanding_interest: assets[i][1].outstandingInterest,
+                            type: asset_type
+                        }
+                    };
+                    poolValues.push(JSON.stringify(asset));
+                }
+
+                // Ensure all arrays have the same length
+                const length = p.totalIssuance.length;
+
+                // Initialize an array of the specified length
+                let tranches = new Array(length);
+
+                if (!p.trancheTokenPrices) {
+                    throw new Error('trancheTokenPrices is missing');
+                }
+
+
+                // Populate the tranches array with the first elements of each array
+                for (let i = 0; i < length; i++) {
+                    const pricePerShare = paraTool.dechexToInt((p.trancheTokenPrices as string[])[i]);
+                    const share = paraTool.dechexToInt(p.totalIssuance[i].toJSON());
+                    tranches[i] = {
+                      share,
+                      pricePerShare,
+                      value: share * 1.0 * pricePerShare / 1e18
+                    };
+                }
+
+                let nav_aum: number;
+                let nav_fees: number;
+                let onchain_cash: number;
+
+                type navType = {
+                    navAum: string;
+                    navFees: string;
+                    reserve: string;
+                }
+
+                const my_nav = p.nav as navType;
+
+                if (p.nav) {
+                    nav_aum = paraTool.dechexToInt(my_nav.navAum);
+                    nav_fees = paraTool.dechexToInt(my_nav.navFees);
+                    onchain_cash = paraTool.dechexToInt(my_nav.reserve);
+                } else {
+                    nav_aum = 0;
+                    nav_fees = 0;
+                    onchain_cash = 0;
+                }
+
                 let pool = {
                     chain_name: chain_name,
                     block_hash: my_blockhash,
@@ -262,60 +447,22 @@ async function fetchAndProcess(): Promise<void> {
                     section: section,
                     storage: storage,
                     track: track,
-                    track_val: p.id,
+                    track_val: p.nav,
                     source: source,
-                    kv: p.id,
+                    kv: p.poolId,
                     pv: {
-                        nav: p.nav,
-                        tranches: p.tranches,
+                        nav: {
+                            nav_aum: nav_aum, // Positive impact on total, Decimals equal to pool_currency
+	                        nav_fees: nav_fees, // Negative impact on total, Decimals equal to pool_currency
+	                        onchain_cash: onchain_cash, // Positive impact on total, Decimals equal to pool_currency
+	                        total: nav_aum + onchain_cash - nav_fees // Decimals equal to pool_currency
+                        },
+                        tranches: tranches
                     }
                 };
                 poolValues.push(JSON.stringify(pool));
             }
 
-            // // iterate through the pools (only 1 pool for now)
-            // for(const r of results) {
-            //     // @ts-ignore
-            //     for(const p of r.portfolio) {
-            //         console.log(`poolId=${r.poolId} portfolio=${p[1]}`);
-            //         let portfolio = {
-            //             chain_name: chain_name,
-            //             block_hash: my_blockhash,
-            //             address_ss58: p[1].activeLoan?.borrower,
-            //             address_pubkey: paraTool.getPubKey(p[1].activeLoan?.borrower),
-            //             block_number: my_blockno,
-            //             ts: ts,
-            //             section: section,
-            //             storage: storage,
-            //             track: track,
-            //             track_val: r.poolId,
-            //             source: source,
-            //             kv: p[0],
-            //             pv: {
-            //                 nav: r.nav,
-            //                 ...p[1]
-            //             }
-            //         };
-            //         const conversionMap: ConversionMap = {
-            //             "pricing.external.info.priceId.isin": hexToUtf8,
-            //             "pricing.external.info.maxPriceVariation": value => paraTool.dechexToInt(value) / 1e27,
-            //             "pricing.external.maxPriceVariation": paraTool.dechexToInt,
-            //             "pricing.external.settlementPriceUpdated": unixTimestampToIsoDate,
-            //             "schedule.maturity.fixed.date": unixTimestampToIsoDate,
-            //             "repaymentsOnScheduleUntil": unixTimestampToIsoDate,
-            //             "originationDate": unixTimestampToIsoDate,
-            //         };
-            //
-            //
-            //         if('activeLoan' in portfolio.pv){
-            //             applyConversion(portfolio.pv.activeLoan, conversionMap);
-            //         }
-            //         portfolioValues.push(JSON.stringify(portfolio));
-            //
-            //     }
-            // }
-
-            // JSON Writing
 
             const year = d.getFullYear();
             const month = String(d.getMonth() + 1).padStart(2, "0"); // JavaScript months are 0-indexed.
