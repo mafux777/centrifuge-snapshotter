@@ -188,6 +188,7 @@ interface Pool {
 }
 
 interface Tranche {
+  id: string;
   share: number;
   pricePerShare: number;
   value: number;
@@ -203,6 +204,12 @@ interface PoolCurrency {
 interface Currency {
     decimals: number;
   symbol: string;
+}
+
+interface TrancheID {
+    tranches: {
+        ids: string[];
+    };
 }
 
 interface Result {
@@ -350,7 +357,7 @@ async function fetchAndProcess(): Promise<void> {
                 for (let i = 0; i < assets.length; i++) {
                     const assetId = assets[i][0];
                     let asset_type: string;
-                    if("internal" in assets[i][1].activeLoan.pricing && assets[i][1].activeLoan.pricing.valuationMethod === "Cash") {
+                    if("internal" in assets[i][1].activeLoan.pricing && "cash" in assets[i][1].activeLoan.pricing.internal.info.valuationMethod) {
                         asset_type = "OffchainCash";
                     } else {
                         asset_type = "Other";
@@ -368,14 +375,14 @@ async function fetchAndProcess(): Promise<void> {
                         //track_val: p.nav,
                         source: source,
 
-                        pv: {
+                        kv: {
                             asset_id:
                             {
                                 pool: p.poolId,
                                 id: assetId
                             }
                         },
-                        kv : {
+                        pv : {
                             pool_currency: {
                                 currency: pc,
                                 decimals: (p.metadata as unknown as Currency).decimals,
@@ -400,6 +407,7 @@ async function fetchAndProcess(): Promise<void> {
 
                 // Initialize an array of the specified length
                 let tranches = new Array(length);
+                let trancheIdDetails = p.poolCurrency as unknown as TrancheID;
 
                 if (!p.trancheTokenPrices) {
                     throw new Error('trancheTokenPrices is missing');
@@ -411,6 +419,7 @@ async function fetchAndProcess(): Promise<void> {
                     const pricePerShare = paraTool.dechexToInt((p.trancheTokenPrices as string[])[i]);
                     const share = paraTool.dechexToInt(p.totalIssuance[i].toJSON());
                     tranches[i] = {
+                        id: trancheIdDetails.tranches.ids[i],
                       share,
                       pricePerShare,
                       value: share * 1.0 * pricePerShare / 1e18
