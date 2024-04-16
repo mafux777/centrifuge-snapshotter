@@ -489,5 +489,6 @@ async function fetchAndProcess(): Promise<void> {
             console.log(`Data written to ${filePath} JSON successfully`);
         }
     }
-    //await interBtc.disconnect();
+    console.log("Done!");
+    process.exit(0);
 }
