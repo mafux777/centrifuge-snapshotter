@@ -11,7 +11,6 @@ const centrifuge = new Centrifuge({
 });
 
 const fs = require('fs');
-const Table = require("cli-table3");
 const yargs = require("yargs/yargs");
 const path = require('path');
 const { hideBin } = require("yargs/helpers");
