@@ -455,7 +455,7 @@ async function fetchAndProcess(): Promise<void> {
                     section: section,
                     storage: storage,
                     track: track,
-                    track_val: p.nav,
+                    //track_val: p.nav,
                     source: source,
                     kv: p.poolId,
                     pv: {
