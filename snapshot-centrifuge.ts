@@ -7,7 +7,8 @@ const paraTool = require("../polkaholic-pro/substrate/paraTool");
 
 
 const centrifuge = new Centrifuge({
-  centrifugeWsUrl: "wss://fullnode.centrifuge.io/",
+  // centrifugeWsUrl: "wss://fullnode.centrifuge.io/",
+  centrifugeWsUrl: "wss://centrifuge-rpc.dwellir.com/",
 });
 
 const fs = require('fs');
@@ -392,7 +393,7 @@ async function fetchAndProcess(): Promise<void> {
                             total_repaid_unscheduled: assets[i][1].activeLoan.totalRepaid.unscheduled,
                             total_borrowed: assets[i][1].activeLoan.totalBorrowed,
                             present_value: assets[i][1].presentValue,
-                            maturity_date: assets[i][1].activeLoan.schedule.maturity.fixed.date,
+                            maturity_date: assets[i][1].activeLoan.schedule?.maturity?.fixed?.date,
                             outstanding_principal: assets[i][1].outstandingPrincipal,
                             outstanding_interest: assets[i][1].outstandingInterest,
                             type: asset_type
