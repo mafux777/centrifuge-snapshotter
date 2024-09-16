@@ -295,44 +295,44 @@ async function fetchAndProcess(): Promise<void> {
 
             console.log(`Connecting to parachain at ${my_blockhash}`);
 
-                const poolData = centrifuge.getApi().pipe(
-                  map(api => api.at(my_blockhash)),
-                  switchMap(api => {
-                    const pools = centrifuge.pools.getPools();
-                    return combineLatest([api, pools]);
-                  }),
-                  switchMap(([api, pools]) => {
-                    const poolCalls = pools.map(pool => {
-                      const trancheTotalIssuance = pool.tranches.map(tranche =>
-                        api.query.ormlTokens.totalIssuance({ Tranche: [pool.id, tranche.id] })
+            const poolData = centrifuge.getApi().pipe(
+              map(api => api.at(my_blockhash)),
+              switchMap(api => {
+                const pools = centrifuge.pools.getPools();
+                return combineLatest([api, pools]);
+              }),
+              switchMap(([api, pools]) => {
+                const poolCalls = pools.map(pool => {
+                  const trancheTotalIssuance = pool.tranches.map(tranche =>
+                    api.query.ormlTokens.totalIssuance({ Tranche: [pool.id, tranche.id] })
+                  );
+                  return forkJoin([
+                    api.call.poolsApi.nav(pool.id),
+                    api.call.loansApi.portfolio(pool.id),
+                    api.call.poolsApi.trancheTokenPrices(pool.id),
+                    api.query.poolSystem.pool(pool.id),
+                    ...trancheTotalIssuance,
+                  ]).pipe(
+                    switchMap(([nav, portfolio, trancheTokenPrices, poolCurrency,...totalIssuance]) => {
+                      // Use poolCurrency to fetch metadata
+                      const poolCurr = poolCurrency.toJSON() as unknown as PoolCurrency;
+                      return api.query.ormlAssetRegistry.metadata(poolCurr.currency).pipe(
+                        map(metadata => ({
+                          poolId: pool.id,
+                          nav: nav.toJSON(),
+                          portfolio: portfolio.toJSON(),
+                          trancheTokenPrices: trancheTokenPrices.toJSON(),
+                          totalIssuance,
+                          poolCurrency: poolCurrency.toJSON(),
+                          metadata: metadata.toJSON(), // Add the metadata to your final object
+                        }))
                       );
-                      return forkJoin([
-                        api.call.poolsApi.nav(pool.id),
-                        api.call.loansApi.portfolio(pool.id),
-                        api.call.poolsApi.trancheTokenPrices(pool.id),
-                        api.query.poolSystem.pool(pool.id),
-                        ...trancheTotalIssuance,
-                      ]).pipe(
-                        switchMap(([nav, portfolio, trancheTokenPrices, poolCurrency,...totalIssuance]) => {
-                          // Use poolCurrency to fetch metadata
-                          const poolCurr = poolCurrency.toJSON() as unknown as PoolCurrency;
-                          return api.query.ormlAssetRegistry.metadata(poolCurr.currency).pipe(
-                            map(metadata => ({
-                              poolId: pool.id,
-                              nav: nav.toJSON(),
-                              portfolio: portfolio.toJSON(),
-                              trancheTokenPrices: trancheTokenPrices.toJSON(),
-                              totalIssuance,
-                              poolCurrency: poolCurrency.toJSON(),
-                              metadata: metadata.toJSON(), // Add the metadata to your final object
-                            }))
-                          );
-                        })
-                      );
-                    });
-                    return forkJoin(poolCalls);
-                  })
-                );
+                    })
+                  );
+                });
+                return forkJoin(poolCalls);
+              })
+            );
 
             const results = await firstValueFrom(poolData);
             console.log(results);
@@ -362,6 +362,8 @@ async function fetchAndProcess(): Promise<void> {
                     } else {
                         asset_type = "Other";
                     }
+
+                    const CID = hexToUtf8(assets[i][1].activeLoan.collateral[1])
 
                     // @ts-ignore
                     const asset = {

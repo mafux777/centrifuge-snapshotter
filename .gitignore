@@ -22,3 +22,11 @@ coverage
 local-setup
 logs.txt
 snapshot-interlay.js.map
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+
